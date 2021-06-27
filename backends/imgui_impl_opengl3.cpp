@@ -7,13 +7,15 @@
 //  [X] Renderer: User texture binding. Use 'GLuint' OpenGL texture identifier as void*/ImTextureID. Read the FAQ about ImTextureID!
 //  [x] Renderer: Desktop GL only: Support for large meshes (64k+ vertices) with 16-bit indices.
 
-// You can use unmodified imgui_impl_* files in your project. See examples/ folder for examples of using this. 
+// You can use unmodified imgui_impl_* files in your project. See examples/ folder for examples of using this.
 // Prefer including the entire imgui/ repository into your project (either as a copy or as a submodule), and only build the backends you need.
 // If you are new to Dear ImGui, read documentation from the docs/ folder + read the top of imgui.cpp.
 // Read online: https://github.com/ocornut/imgui/tree/master/docs
 
 // CHANGELOG
 // (minor and older changes stripped away, please see git history for details)
+//  2021-06-25: OpenGL: Use OES_vertex_array extension on Emscripten + backup/restore current state.
+//  2021-06-21: OpenGL: Destroy individual vertex/fragment shader objects right after they are linked into the main shader.
 //  2021-05-24: OpenGL: Access GL_CLIP_ORIGIN when "GL_ARB_clip_control" extension is detected, inside of just OpenGL 4.5 version.
 //  2021-05-19: OpenGL: Replaced direct access to ImDrawCmd::TextureId with a call to ImDrawCmd::GetTexID(). (will become a requirement)
 //  2021-04-06: OpenGL: Don't try to read GL_CLIP_ORIGIN unless we're OpenGL 4.5 or greater.
@@ -93,6 +95,12 @@
 // GL includes
 #if defined(IMGUI_IMPL_OPENGL_ES2)
 #include <GLES2/gl2.h>
+#if defined(__EMSCRIPTEN__)
+#ifndef GL_GLEXT_PROTOTYPES
+#define GL_GLEXT_PROTOTYPES
+#endif
+#include <GLES2/gl2ext.h>
+#endif
 #elif defined(IMGUI_IMPL_OPENGL_ES3)
 #if (defined(__APPLE__) && (TARGET_OS_IOS || TARGET_OS_TV))
 #include <OpenGLES/ES3/gl.h>    // Use GL ES 3
@@ -131,6 +139,17 @@ using namespace gl;
 #endif
 #endif
 
+// Vertex arrays are not supported on ES2/WebGL1 unless Emscripten which uses an extension
+#ifndef IMGUI_IMPL_OPENGL_ES2
+#define IMGUI_IMPL_OPENGL_USE_VERTEX_ARRAY
+#elif defined(__EMSCRIPTEN__)
+#define IMGUI_IMPL_OPENGL_USE_VERTEX_ARRAY
+#define glBindVertexArray       glBindVertexArrayOES
+#define glGenVertexArrays       glGenVertexArraysOES
+#define glDeleteVertexArrays    glDeleteVertexArraysOES
+#define GL_VERTEX_ARRAY_BINDING GL_VERTEX_ARRAY_BINDING_OES
+#endif
+
 // Desktop GL 3.2+ has glDrawElementsBaseVertex() which GL ES and WebGL don't have.
 #if !defined(IMGUI_IMPL_OPENGL_ES2) && !defined(IMGUI_IMPL_OPENGL_ES3) && defined(GL_VERSION_3_2)
 #define IMGUI_IMPL_OPENGL_MAY_HAVE_VTX_OFFSET
@@ -155,7 +174,7 @@ using namespace gl;
 static GLuint       g_GlVersion = 0;                // Extracted at runtime using GL_MAJOR_VERSION, GL_MINOR_VERSION queries (e.g. 320 for GL 3.2)
 static char         g_GlslVersionString[32] = "";   // Specified by user or detected based on compile time GL settings.
 static GLuint       g_FontTexture = 0;
-static GLuint       g_ShaderHandle = 0, g_VertHandle = 0, g_FragHandle = 0;
+static GLuint       g_ShaderHandle = 0;
 static GLint        g_AttribLocationTex = 0, g_AttribLocationProjMtx = 0;                                // Uniforms location
 static GLuint       g_AttribLocationVtxPos = 0, g_AttribLocationVtxUV = 0, g_AttribLocationVtxColor = 0; // Vertex attributes location
 static unsigned int g_VboHandle = 0, g_ElementsHandle = 0;
@@ -322,7 +341,7 @@ static void ImGui_ImplOpenGL3_SetupRenderState(ImDrawData* draw_data, int fb_wid
 #endif
 
     (void)vertex_array_object;
-#ifndef IMGUI_IMPL_OPENGL_ES2
+#ifdef IMGUI_IMPL_OPENGL_USE_VERTEX_ARRAY
     glBindVertexArray(vertex_array_object);
 #endif
 
@@ -357,7 +376,7 @@ void    ImGui_ImplOpenGL3_RenderDrawData(ImDrawData* draw_data)
     GLuint last_sampler; if (g_GlVersion >= 330) { glGetIntegerv(GL_SAMPLER_BINDING, (GLint*)&last_sampler); } else { last_sampler = 0; }
 #endif
     GLuint last_array_buffer; glGetIntegerv(GL_ARRAY_BUFFER_BINDING, (GLint*)&last_array_buffer);
-#ifndef IMGUI_IMPL_OPENGL_ES2
+#ifdef IMGUI_IMPL_OPENGL_USE_VERTEX_ARRAY
     GLuint last_vertex_array_object; glGetIntegerv(GL_VERTEX_ARRAY_BINDING, (GLint*)&last_vertex_array_object);
 #endif
 #ifdef GL_POLYGON_MODE
@@ -384,7 +403,7 @@ void    ImGui_ImplOpenGL3_RenderDrawData(ImDrawData* draw_data)
     // Recreate the VAO every time (this is to easily allow multiple GL contexts to be rendered to. VAO are not shared among GL contexts)
     // The renderer would actually work without any VAO bound, but then our VertexAttrib calls would overwrite the default one currently bound.
     GLuint vertex_array_object = 0;
-#ifndef IMGUI_IMPL_OPENGL_ES2
+#ifdef IMGUI_IMPL_OPENGL_USE_VERTEX_ARRAY
     glGenVertexArrays(1, &vertex_array_object);
 #endif
     ImGui_ImplOpenGL3_SetupRenderState(draw_data, fb_width, fb_height, vertex_array_object);
@@ -442,7 +461,7 @@ void    ImGui_ImplOpenGL3_RenderDrawData(ImDrawData* draw_data)
     }
 
     // Destroy the temporary VAO
-#ifndef IMGUI_IMPL_OPENGL_ES2
+#ifdef IMGUI_IMPL_OPENGL_USE_VERTEX_ARRAY
     glDeleteVertexArrays(1, &vertex_array_object);
 #endif
 
@@ -454,7 +473,7 @@ void    ImGui_ImplOpenGL3_RenderDrawData(ImDrawData* draw_data)
         glBindSampler(0, last_sampler);
 #endif
     glActiveTexture(last_active_texture);
-#ifndef IMGUI_IMPL_OPENGL_ES2
+#ifdef IMGUI_IMPL_OPENGL_USE_VERTEX_ARRAY
     glBindVertexArray(last_vertex_array_object);
 #endif
     glBindBuffer(GL_ARRAY_BUFFER, last_array_buffer);
@@ -558,7 +577,7 @@ bool    ImGui_ImplOpenGL3_CreateDeviceObjects()
     GLint last_texture, last_array_buffer;
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &last_texture);
     glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &last_array_buffer);
-#ifndef IMGUI_IMPL_OPENGL_ES2
+#ifdef IMGUI_IMPL_OPENGL_USE_VERTEX_ARRAY
     GLint last_vertex_array;
     glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &last_vertex_array);
 #endif
@@ -693,22 +712,28 @@ bool    ImGui_ImplOpenGL3_CreateDeviceObjects()
 
     // Create shaders
     const GLchar* vertex_shader_with_version[2] = { g_GlslVersionString, vertex_shader };
-    g_VertHandle = glCreateShader(GL_VERTEX_SHADER);
-    glShaderSource(g_VertHandle, 2, vertex_shader_with_version, NULL);
-    glCompileShader(g_VertHandle);
-    CheckShader(g_VertHandle, "vertex shader");
+    GLuint vert_handle = glCreateShader(GL_VERTEX_SHADER);
+    glShaderSource(vert_handle, 2, vertex_shader_with_version, NULL);
+    glCompileShader(vert_handle);
+    CheckShader(vert_handle, "vertex shader");
 
     const GLchar* fragment_shader_with_version[2] = { g_GlslVersionString, fragment_shader };
-    g_FragHandle = glCreateShader(GL_FRAGMENT_SHADER);
-    glShaderSource(g_FragHandle, 2, fragment_shader_with_version, NULL);
-    glCompileShader(g_FragHandle);
-    CheckShader(g_FragHandle, "fragment shader");
+    GLuint frag_handle = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(frag_handle, 2, fragment_shader_with_version, NULL);
+    glCompileShader(frag_handle);
+    CheckShader(frag_handle, "fragment shader");
 
+    // Link
     g_ShaderHandle = glCreateProgram();
-    glAttachShader(g_ShaderHandle, g_VertHandle);
-    glAttachShader(g_ShaderHandle, g_FragHandle);
+    glAttachShader(g_ShaderHandle, vert_handle);
+    glAttachShader(g_ShaderHandle, frag_handle);
     glLinkProgram(g_ShaderHandle);
     CheckProgram(g_ShaderHandle, "shader program");
+
+    glDetachShader(g_ShaderHandle, vert_handle);
+    glDetachShader(g_ShaderHandle, frag_handle);
+    glDeleteShader(vert_handle);
+    glDeleteShader(frag_handle);
 
     g_AttribLocationTex = glGetUniformLocation(g_ShaderHandle, "Texture");
     g_AttribLocationProjMtx = glGetUniformLocation(g_ShaderHandle, "ProjMtx");
@@ -725,7 +750,7 @@ bool    ImGui_ImplOpenGL3_CreateDeviceObjects()
     // Restore modified GL state
     glBindTexture(GL_TEXTURE_2D, last_texture);
     glBindBuffer(GL_ARRAY_BUFFER, last_array_buffer);
-#ifndef IMGUI_IMPL_OPENGL_ES2
+#ifdef IMGUI_IMPL_OPENGL_USE_VERTEX_ARRAY
     glBindVertexArray(last_vertex_array);
 #endif
 
@@ -736,10 +761,6 @@ void    ImGui_ImplOpenGL3_DestroyDeviceObjects()
 {
     if (g_VboHandle)        { glDeleteBuffers(1, &g_VboHandle); g_VboHandle = 0; }
     if (g_ElementsHandle)   { glDeleteBuffers(1, &g_ElementsHandle); g_ElementsHandle = 0; }
-    if (g_ShaderHandle && g_VertHandle) { glDetachShader(g_ShaderHandle, g_VertHandle); }
-    if (g_ShaderHandle && g_FragHandle) { glDetachShader(g_ShaderHandle, g_FragHandle); }
-    if (g_VertHandle)       { glDeleteShader(g_VertHandle); g_VertHandle = 0; }
-    if (g_FragHandle)       { glDeleteShader(g_FragHandle); g_FragHandle = 0; }
     if (g_ShaderHandle)     { glDeleteProgram(g_ShaderHandle); g_ShaderHandle = 0; }
 
     ImGui_ImplOpenGL3_DestroyFontsTexture();
