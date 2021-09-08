@@ -1,4 +1,4 @@
-// dear imgui, v1.84 WIP
+// dear imgui, v1.85 WIP
 // (tables and columns code)
 
 /*
@@ -288,12 +288,7 @@ inline ImGuiTableFlags TableFixFlags(ImGuiTableFlags flags, ImGuiWindow* outer_w
         flags |= ImGuiTableFlags_NoSavedSettings;
 
     // Inherit _NoSavedSettings from top-level window (child windows always have _NoSavedSettings set)
-#ifdef IMGUI_HAS_DOCK
-    ImGuiWindow* window_for_settings = outer_window->RootWindowDockStop;
-#else
-    ImGuiWindow* window_for_settings = outer_window->RootWindow;
-#endif
-    if (window_for_settings->Flags & ImGuiWindowFlags_NoSavedSettings)
+    if (outer_window->RootWindow->Flags & ImGuiWindowFlags_NoSavedSettings)
         flags |= ImGuiTableFlags_NoSavedSettings;
 
     return flags;
@@ -1484,6 +1479,7 @@ void ImGui::TableSetupScrollFreeze(int columns, int rows)
     table->IsUnfrozenRows = (table->FreezeRowsCount == 0); // Make sure this is set before TableUpdateLayout() so ImGuiListClipper can benefit from it.b
 
     // Ensure frozen columns are ordered in their section. We still allow multiple frozen columns to be reordered.
+    // FIXME-TABLE: This work for preserving 2143 into 21|43. How about 4321 turning into 21|43? (preserve relative order in each section)
     for (int column_n = 0; column_n < table->FreezeColumnsRequest; column_n++)
     {
         int order_n = table->DisplayOrderToIndex[column_n];
@@ -1961,8 +1957,9 @@ void ImGui::TableBeginCell(ImGuiTable* table, int column_n)
     window->SkipItems = column->IsSkipItems;
     if (column->IsSkipItems)
     {
-        window->DC.LastItemId = 0;
-        window->DC.LastItemStatusFlags = 0;
+        ImGuiContext& g = *GImGui;
+        g.LastItemData.ID = 0;
+        g.LastItemData.StatusFlags = 0;
     }
 
     if (table->Flags & ImGuiTableFlags_NoClip)
